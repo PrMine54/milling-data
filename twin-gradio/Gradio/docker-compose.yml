@@ -1,0 +1,10 @@
+version: "3"
+services:
+  gradio-app:
+    image: python:3.11
+    build:
+      context: .
+    ports:
+      - "7860:7860"
+    volumes:
+      - .:/gradio_app

@@ -1,0 +1,221 @@
+version: "2.2"
+
+volumes:
+  metadata_data: {}
+  middle_var: {}
+  historical_var: {}
+  broker_var: {}
+  coordinator_var: {}
+  router_var: {}
+  druid_shared: {}
+
+
+services:
+  app:
+    build: .
+    restart: unless-stopped
+    container_name: app
+    ports:
+      - "8000:8000"
+    environment:
+      TOPIC: stream_prediction
+      TOPIC_EDGE: stream_prediction_edge
+      INTERNAL_KAFKA_ADDR: 'kafka:9092'
+    networks:
+      example-network:
+        ipv4_address: 172.16.238.10
+    depends_on:
+      - kafka
+      - zookeeper
+#  consumer:
+#    build: consumer
+#    container_name: consumer
+#    environment:
+#      TOPIC: stream_prediction
+#      INTERNAL_KAFKA_ADDR: 'kafka:9092'
+#    networks:
+#      example-network:
+#        ipv4_address: 172.16.238.15
+#    depends_on:
+#      - kafka
+#      - zookeeper
+  prometheus:
+    image: prom/prometheus:latest
+    restart: unless-stopped
+    container_name: prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+    networks:
+      example-network:
+        ipv4_address: 172.16.238.11
+
+  grafana:
+    image: grafana/grafana:latest
+    restart: unless-stopped
+    user: "472"
+    container_name: grafana
+    depends_on:
+      - prometheus
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./datasource.yml:/etc/grafana/provisioning/datasource.yml
+    env_file:
+      - config.monitoring
+    networks:
+      example-network:
+        ipv4_address: 172.16.238.12
+
+  zookeeper:
+    image: zookeeper:3.5
+    container_name: zookeeper
+    ports:
+      - "2181:2181"
+    environment:
+      ALLOW_ANONYMOUS_LOGIN: "yes"
+      ZOO_MY_ID: 1
+    networks:
+      example-network:
+        ipv4_address: 172.16.238.13
+
+  kafka:
+    image: wurstmeister/kafka
+    container_name: kafka
+    ports:
+      - "9092:9092"
+      - "9093:9093"
+    environment:
+      KAFKA_ZOOKEEPER_CONNECT: 'zookeeper:2181'
+      KAFKA_LISTENERS: 'INTERNAL://:9092'
+      KAFKA_ADVERTISED_LISTENERS: 'INTERNAL://:9092'
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: 'INTERNAL:PLAINTEXT'
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: '1'
+      KAFKA_CREATE_TOPICS: 'stream_prediction:1:1,stream_prediction_edge:1:1'
+      KAFKA_ADVERTISED_HOST_NAME: host.docker.internal # change to 172.17.0.1 if running on Ubuntu
+    depends_on:
+      - zookeeper
+    networks:
+      example-network:
+        ipv4_address: 172.16.238.14
+  postgres:
+    container_name: postgres
+    image: postgres:latest
+    volumes:
+      - metadata_data:/var/lib/postgresql/data
+    environment:
+      - POSTGRES_PASSWORD=FoolishPassword
+      - POSTGRES_USER=druid
+      - POSTGRES_DB=druid
+    networks:
+      example-network:
+        ipv4_address: 172.16.238.16
+
+  coordinator:
+    image: apache/druid:24.0.0
+    container_name: coordinator
+    volumes:
+      - druid_shared:/opt/shared
+      - coordinator_var:/opt/druid/var
+    depends_on:
+      - zookeeper
+      - postgres
+    ports:
+      - "8081:8081"
+    command:
+      - coordinator
+    env_file:
+      - environment
+    networks:
+      example-network:
+        ipv4_address: 172.16.238.17
+
+  broker:
+    image: apache/druid:24.0.0
+    container_name: broker
+    volumes:
+      - broker_var:/opt/druid/var
+    depends_on:
+      - zookeeper
+      - postgres
+      - coordinator
+    ports:
+      - "8082:8082"
+    command:
+      - broker
+    env_file:
+      - environment
+    networks:
+      example-network:
+        ipv4_address: 172.16.238.18
+  historical:
+    image: apache/druid:24.0.0
+    container_name: historical
+    volumes:
+      - druid_shared:/opt/shared
+      - historical_var:/opt/druid/var
+    depends_on:
+      - zookeeper
+      - postgres
+      - coordinator
+    ports:
+      - "8083:8083"
+    command:
+      - historical
+    env_file:
+      - environment
+    networks:
+      example-network:
+        ipv4_address: 172.16.238.19
+
+  middlemanager:
+    image: apache/druid:24.0.0
+    container_name: middlemanager
+    volumes:
+      - druid_shared:/opt/shared
+      - middle_var:/opt/druid/var
+    depends_on:
+      - zookeeper
+      - postgres
+      - coordinator
+    ports:
+      - "8091:8091"
+      - "8100-8105:8100-8105"
+    command:
+      - middleManager
+    env_file:
+      - environment
+    networks:
+      example-network:
+        ipv4_address: 172.16.238.20
+
+  router:
+    image: apache/druid:24.0.0
+    container_name: router
+    volumes:
+      - router_var:/opt/druid/var
+    depends_on:
+      - zookeeper
+      - postgres
+      - coordinator
+    ports:
+      - "8888:8888"
+    command:
+      - router
+    env_file:
+      - environment
+    networks:
+      example-network:
+        ipv4_address: 172.16.238.21
+networks:
+  example-network:
+    name: example-network
+    driver: bridge
+    ipam:
+      driver: default
+      config:
+        - subnet: 172.16.238.0/24
